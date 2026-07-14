@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#0E2340">
+
+<title>Multi-Skill Monitoring | Ajinomoto Mojokerto Factory</title>
+<link rel="icon" type="image/png" href="https://upload.wikimedia.org/wikipedia/commons/0/01/Ajinomoto_Group_Global_Brand_logo.png">
+
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    /* Warna dasar disamakan dengan Landing/Login/Index (--bg-base / --navy)
+       supaya transisi buka pertama kali tidak terlihat "kedip" warna. */
+    background: #050710;
+    font-family: 'Segoe UI', Arial, sans-serif;
+  }
+
+  iframe {
+    border: none;
+    width: 100vw;
+    height: 100vh;
+    display: block;
+    background: #050710;
+  }
+
+  /* =====================================================
+     LOADING SCREEN
+     Ditampilkan selagi iframe (Apps Script) masih loading,
+     supaya user tidak melihat layar kosong dulu.
+  ===================================================== */
+  #loader {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    background: #050710;
+    z-index: 999;
+    transition: opacity .4s ease;
+  }
+
+  #loader img {
+    width: 110px;
+    animation: pulseLogo 1.8s ease-in-out infinite;
+  }
+
+  #loader .text {
+    color: #94a3b8;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: .5px;
+  }
+
+  #loader .ring {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    border: 3px solid rgba(255,255,255,.08);
+    border-top: 3px solid #5B5BF6;
+    animation: spin 1s linear infinite;
+  }
+
+  @keyframes pulseLogo {
+    0%, 100% { transform: scale(1); opacity: .9; }
+    50%      { transform: scale(1.06); opacity: 1; }
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  #loader.hide {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  /* =====================================================
+     ERROR STATE
+     Muncul kalau iframe benar-benar gagal load (misal deployment
+     URL salah / belum di-redeploy / lagi ada masalah jaringan) DAN
+     tidak kunjung ada sinyal MSMS_READY maupun event `load` dalam
+     batas waktu yang wajar.
+  ===================================================== */
+  #errorBox {
+    position: fixed;
+    inset: 0;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    background: #050710;
+    color: #E5E9F5;
+    text-align: center;
+    padding: 24px;
+    z-index: 998;
+  }
+
+  #errorBox img { width: 80px; opacity: .9; }
+  #errorBox h2  { margin: 0; font-size: 18px; }
+  #errorBox p   { margin: 0; font-size: 13px; color: #94a3b8; max-width: 420px; line-height: 1.6; }
+
+  #errorBox button {
+    margin-top: 8px;
+    padding: 10px 22px;
+    border: none;
+    border-radius: 12px;
+    background: linear-gradient(135deg,#5B5BF6,#22D3EE);
+    color: #fff;
+    font-weight: 700;
+    font-size: 13px;
+    cursor: pointer;
+  }
+</style>
+</head>
+<body>
+
+<!-- LOADING SCREEN -->
+<div id="loader">
+  <img src="https://upload.wikimedia.org/wikipedia/commons/0/01/Ajinomoto_Group_Global_Brand_logo.png" alt="Ajinomoto">
+  <div class="ring"></div>
+  <div class="text">MEMUAT MULTI-SKILL MONITORING SYSTEM…</div>
+</div>
+
+<!-- ERROR STATE -->
+<div id="errorBox">
+  <img src="https://upload.wikimedia.org/wikipedia/commons/0/01/Ajinomoto_Group_Global_Brand_logo.png" alt="Ajinomoto">
+  <h2>Gagal memuat sistem</h2>
+  <p>Sistem tidak dapat dimuat. Silakan periksa koneksi internet Anda, atau coba muat ulang halaman. Jika masalah berlanjut, hubungi Administrator HR.</p>
+  <button onclick="location.reload()">Muat Ulang</button>
+</div>
+
+<!-- MAIN APP -->
+<!--
+  PENTING: Ganti src di bawah ini dengan URL Web App deployment MSMS
+  Anda (dari Deploy > Manage deployments > Web app URL). Pastikan itu
+  adalah URL /exec (bukan /dev), dan deployment sudah diset:
+    Execute as     : User accessing the web app
+    Who has access : sesuai kebijakan IT (mis. Anyone within organisasi)
+-->
+<iframe
+  id="msmsFrame"
+  src="https://script.google.com/macros/s/AKfycbwXRL8EjcSkiBk7wJOU8hmQjeVVyjIRwZCfNQ5AxX0vNkxiRBczAkrS2rDoLqFDLD1l/exec"
+  title="Multi-Skill Monitoring System"
+  allow="clipboard-write"
+></iframe>
+
+<script>
+  const loader   = document.getElementById('loader');
+  const errorBox = document.getElementById('errorBox');
+  const frame    = document.getElementById('msmsFrame');
+
+  let fallbackTimer = null;
+
+  // -----------------------------------------------------------------------
+  // FALLBACK TIMEOUT
+  // -----------------------------------------------------------------------
+  // Dinaikkan dari 15 detik -> 25 detik. Alasan: transisi Index -> Landing
+  // (saat logout) melibatkan RPC logoutUser() ke Apps Script (bisa cold-start)
+  // DITAMBAH reload dokumen baru yang harus fetch ulang Tailwind CDN,
+  // Font Awesome CDN, dan Google Fonts dari nol. Kombinasi ini sangat mudah
+  // melebihi 15 detik terutama di jaringan factory yang lebih lambat,
+  // sehingga error palsu ("Gagal memuat sistem") sering muncul padahal
+  // sistem sebenarnya baik-baik saja, hanya butuh waktu sedikit lebih lama.
+  const FALLBACK_TIMEOUT_MS = 25000;
+
+  function showLoader(){
+    errorBox.style.display = 'none';
+    loader.style.display = 'flex';
+    // paksa reflow biar transition opacity jalan lagi walau sebelumnya 'hide'
+    void loader.offsetWidth;
+    loader.classList.remove('hide');
+  }
+
+  function hideLoader(){
+    // PERBAIKAN BUG: sebelumnya fungsi ini hanya menyembunyikan #loader dan
+    // TIDAK PERNAH menyembunyikan #errorBox. Akibatnya, begitu fallback
+    // timer sempat habis SEKALI (mis. transisi Index -> Landing yang agak
+    // lambat) dan #errorBox sempat tampil, halaman akan terjebak permanen
+    // di layar "Gagal memuat sistem" walau iframe sebenarnya berhasil load
+    // setelahnya. Sekarang errorBox ikut dibersihkan setiap kali kita yakin
+    // aplikasi di dalam iframe sudah siap.
+    errorBox.style.display = 'none';
+    loader.classList.add('hide');
+    setTimeout(() => {
+      // hanya benar-benar disembunyikan kalau tidak ada loading baru masuk
+      if (loader.classList.contains('hide')) {
+        loader.style.display = 'none';
+      }
+    }, 400);
+  }
+
+  function armFallbackTimeout(){
+    clearTimeout(fallbackTimer);
+    fallbackTimer = setTimeout(() => {
+      if (loader.style.display !== 'none') {
+        loader.style.display = 'none';
+        errorBox.style.display = 'flex';
+      }
+    }, FALLBACK_TIMEOUT_MS);
+  }
+
+  // Load pertama kali
+  armFallbackTimeout();
+
+  // -----------------------------------------------------------------------
+  // SINYAL "SIAP" DARI DALAM IFRAME
+  // -----------------------------------------------------------------------
+  // Dua sumber sinyal dipakai bersamaan (yang lebih dulu datang, menang):
+  //
+  // 1) postMessage({type:'MSMS_READY'}) — sinyal UTAMA, dikirim oleh
+  //    Landing.html, Login.html, dan Index.html tepat setelah halaman itu
+  //    benar-benar siap dilihat/dipakai user (bukan sekadar dokumen HTML
+  //    selesai di-parse). Ini lebih akurat daripada event `load` karena
+  //    `load` hanya menandakan resource statis selesai, bukan aplikasi siap
+  //    (mis. Index.html masih perlu 4 RPC call ke Apps Script setelah
+  //    dokumennya "load").
+  //
+  // 2) Event `load` pada iframe — dipertahankan sebagai FALLBACK KEDUA,
+  //    untuk kasus MSMS_READY gagal terkirim (mis. skrip child error
+  //    sebelum sempat memanggil postMessage, atau versi HTML lama yang
+  //    belum mengirim MSMS_READY sama sekali).
+  //
+  // Kedua jalur ini melakukan hal yang sama: batalkan fallback timer, dan
+  // bersihkan SEKALIGUS #loader dan #errorBox.
+  function markAppReady_(){
+    clearTimeout(fallbackTimer);
+    hideLoader();
+  }
+
+  frame.addEventListener('load', markAppReady_);
+
+  window.addEventListener('message', (e) => {
+    if (!e.data || typeof e.data !== 'object') return;
+
+    if (e.data.type === 'MSMS_READY') {
+      markAppReady_();
+    }
+
+    if (e.data.type === 'MSMS_LOADING') {
+      showLoader();
+      armFallbackTimeout();
+    }
+
+    // Opsional: kalau suatu saat butuh wrapper yang memindahkan seluruh
+    // app ke deployment/URL lain, wrapper yang urus, bukan skrip di
+    // dalam iframe yang memaksa window.top.
+    if (e.data.type === 'MSMS_NAVIGATE' && e.data.url) {
+      showLoader();
+      armFallbackTimeout();
+      frame.src = e.data.url;
+    }
+  });
+</script>
+
+</body>
+</html>
